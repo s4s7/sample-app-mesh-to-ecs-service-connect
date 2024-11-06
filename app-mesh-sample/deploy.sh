@@ -38,8 +38,8 @@ ecr_login() {
     fi
 }
 
-# deploy_images builds and pushes docker images for colorapp and feapp to ECR
-deploy_images() {
+# build_and_push_images builds and pushes docker images for colorapp and feapp to ECR
+build_and_push_images() {
     for f in cwagent colorapp feapp; do
         aws ecr describe-repositories --repository-name ${PROJECT_NAME}/${f} >/dev/null 2>&1 || aws ecr create-repository --repository-name ${PROJECT_NAME}/${f} >/dev/null
     done
@@ -50,11 +50,21 @@ deploy_images() {
     docker build -t ${CW_AGENT_IMAGE} --platform=linux/amd64 ${DIR}/src/cwagent && docker push ${CW_AGENT_IMAGE}
     docker build -t ${COLOR_APP_IMAGE} --platform=linux/amd64 --build-arg GO_PROXY=${GO_PROXY} ${DIR}/src/colorapp && docker push ${COLOR_APP_IMAGE}
     docker build -t ${FRONT_APP_IMAGE} --platform=linux/amd64 --build-arg GO_PROXY=${GO_PROXY} ${DIR}/src/feapp && docker push ${FRONT_APP_IMAGE}
+
+    echo "Images pushed to ECR"
 }
 
 # deploy deploys infra, colorapp and feapp.
 deploy() {
     stage=$1
+
+    # Check if the stack is ready
+    stack_status=$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --query "Stacks[0].StackStatus" --output text)
+    echo "Current stack status: ${stack_status}"
+    if [[ "$stack_status" == "CREATE_IN_PROGRESS" ]]; then
+        echo "Stack is still in CREATE_IN_PROGRESS. Please wait for it to complete."
+        return
+    fi
 
     echo "Deploying stack ${STACK_NAME}, this may take a few minutes..."
     aws cloudformation deploy \
@@ -68,6 +78,8 @@ deploy() {
         "CloudWatchAgentImage=${CW_AGENT_IMAGE}" \
         "ColorAppImage=${COLOR_APP_IMAGE}" \
         "FrontAppImage=${FRONT_APP_IMAGE}"
+
+    echo "deploy success !"
 }
 
 delete_cfn_stack() {
@@ -96,7 +108,7 @@ print_endpoint() {
 deploy_stacks() {
     if [ -z $SKIP_IMAGES ]; then
         echo "deploy images..."
-        deploy_images
+        build_and_push_images
     fi
 
     echo "deploy app using stage ${stage}"
