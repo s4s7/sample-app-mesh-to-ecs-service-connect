@@ -31,7 +31,7 @@ GO_PROXY=${GO_PROXY:-"https://proxy.golang.org"}
 
 ecr_login() {
     if [ $AWS_CLI_VERSION -gt 1 ]; then
-        aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | \
+        aws ecr get-login-password --region ${AWS_DEFAULT_REGION} |
             docker login --username AWS --password-stdin ${ECR_URL}
     else
         $(aws ecr get-login --no-include-email)
@@ -45,9 +45,11 @@ deploy_images() {
     done
 
     ecr_login
-    docker build -t ${CW_AGENT_IMAGE} ${DIR}/src/cwagent && docker push ${CW_AGENT_IMAGE}
-    docker build -t ${COLOR_APP_IMAGE} --build-arg GO_PROXY=${GO_PROXY} ${DIR}/src/colorapp && docker push ${COLOR_APP_IMAGE}
-    docker build -t ${FRONT_APP_IMAGE} --build-arg GO_PROXY=${GO_PROXY} ${DIR}/src/feapp && docker push ${FRONT_APP_IMAGE}
+
+    # for ARM
+    docker build -t ${CW_AGENT_IMAGE} --platform=linux/amd64 ${DIR}/src/cwagent && docker push ${CW_AGENT_IMAGE}
+    docker build -t ${COLOR_APP_IMAGE} --platform=linux/amd64 --build-arg GO_PROXY=${GO_PROXY} ${DIR}/src/colorapp && docker push ${COLOR_APP_IMAGE}
+    docker build -t ${FRONT_APP_IMAGE} --platform=linux/amd64 --build-arg GO_PROXY=${GO_PROXY} ${DIR}/src/feapp && docker push ${FRONT_APP_IMAGE}
 }
 
 # deploy deploys infra, colorapp and feapp.
@@ -101,7 +103,7 @@ deploy_stacks() {
     deploy "${stage}"
 
     if [ "${stage}" == "2-meshify" ]; then
-      confirm_service_linked_role
+        confirm_service_linked_role
     fi
     print_endpoint
 }
