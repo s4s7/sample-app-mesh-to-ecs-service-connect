@@ -1,0 +1,297 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description:
+  Amazon ECS Service Connect Sample
+
+# ------------------------------------------------------------#
+# Input Parameters
+# ------------------------------------------------------------#
+Parameters:
+  AZa:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: ap-northeast-1a
+  AZc:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: ap-northeast-1c
+
+Resources:
+
+# VPC
+# ------------------------------------------------------------#
+  vpctest:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "172.16.0.0/16"
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: default
+      Tags:
+      - Key: Name
+        Value: "vpc-test"
+
+# RouteTable
+# ------------------------------------------------------------#
+  rtpublic:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref vpctest
+      Tags:
+      - Key: Name
+        Value: "rt-public"
+
+# Subnet
+# ------------------------------------------------------------#
+  snpublica:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref vpctest
+      CidrBlock: "172.16.1.0/24"
+      AvailabilityZone: !Ref AZa
+      Tags:
+      - Key: Name
+        Value: "sn-public-a"
+  rtasnpublica:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref snpublica
+      RouteTableId: !Ref rtpublic
+
+  snpublicc:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref vpctest
+      CidrBlock: "172.16.2.0/24"
+      AvailabilityZone: !Ref AZc
+      Tags:
+      - Key: Name
+        Value: "sn-public-c"
+  rtasnpublicc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref snpublicc
+      RouteTableId: !Ref rtpublic
+
+# Internet Gateway
+# ------------------------------------------------------------#
+  igw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: "igw"
+  atigw:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref vpctest
+      InternetGatewayId: !Ref igw
+
+  rtpublicigw:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref rtpublic
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref igw
+
+# Security Group
+# ------------------------------------------------------------#
+  sgclient:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: sgclient
+      GroupDescription: sgclient
+      VpcId: !Ref vpctest
+      SecurityGroupEgress:
+      - IpProtocol: "-1"
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: sgclient
+
+  sgweb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: sgweb
+      GroupDescription: sgweb
+      VpcId: !Ref vpctest
+      SecurityGroupEgress:
+      - IpProtocol: "-1"
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: sgweb
+
+  sgwebfromclient:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourceSecurityGroupId: !Ref sgclient
+      GroupId: !Ref sgweb
+      Description: "web from client"
+
+# IAM Role
+# ------------------------------------------------------------#
+  roleecstaskexec:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      RoleName: "role-ecs-taskexec"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+      Policies:
+        - PolicyName: roleecstaskexecpolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: '*'
+
+  roleecstask:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      RoleName: "role-ecstask"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+      Policies:
+        - PolicyName: roleecstaskpolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                  - logs:CreateLogGroup
+                Resource: '*'
+
+# LogGroup
+# ------------------------------------------------------------#
+  ecslogs:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: "/ecs/logs"
+      RetentionInDays: 30
+
+# Cluster
+# ------------------------------------------------------------#
+  cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: cluster
+      ServiceConnectDefaults:
+        Namespace: local
+
+# TaskDefinition
+# ------------------------------------------------------
+  taskdefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: taskdefinition
+      Cpu: 512
+      Memory: 1024
+      ExecutionRoleArn: !GetAtt roleecstaskexec.Arn
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      TaskRoleArn: !GetAtt roleecstask.Arn
+      ContainerDefinitions:
+        - Name: container
+          Essential: True
+          Image: "public.ecr.aws/amazonlinux/amazonlinux:2023.0.20230517.1"
+          Command:
+            - "/bin/sh -c \"yum install -y httpd && echo '<html> <head> <title>Sample</title> </head> <body> TEST </body> </html>' > /var/www/html/index.html && /usr/sbin/httpd -D FOREGROUND\""
+          EntryPoint:
+            - "sh"
+            - "-c"
+          Memory: 512
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: TCP
+              AppProtocol: http
+              Name: website
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: "/ecs/logs"
+              awslogs-region: "ap-northeast-1"
+              awslogs-stream-prefix: ecs
+              awslogs-create-group: true
+
+# Service
+# ------------------------------------------------------------#
+  serviceweb:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: "service-web"
+      Cluster: !Ref cluster
+      DesiredCount: 2
+      LaunchType: FARGATE
+      EnableExecuteCommand: True
+      TaskDefinition: !Ref taskdefinition
+      PlatformVersion: LATEST
+      ServiceConnectConfiguration:
+        Enabled: true
+        Namespace: local
+        Services:
+          - DiscoveryName: web
+            ClientAliases:
+              - DnsName: "web.local"
+                Port: 80
+            PortName: website
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+          - !Ref sgweb
+          Subnets:
+          - !Ref snpublica
+          - !Ref snpublicc
+
+  serviceclient:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: "service-client"
+      Cluster: !Ref cluster
+      DesiredCount: 2
+      LaunchType: FARGATE
+      EnableExecuteCommand: True
+      TaskDefinition: !Ref taskdefinition
+      PlatformVersion: LATEST
+      ServiceConnectConfiguration:
+        Enabled: true
+        Namespace: local
+        Services:
+          - DiscoveryName: client
+            ClientAliases:
+              - DnsName: "client.local"
+                Port: 80
+            PortName: website
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+          - !Ref sgclient
+          Subnets:
+          - !Ref snpublica
+          - !Ref snpublicc
